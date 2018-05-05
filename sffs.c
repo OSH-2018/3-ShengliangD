@@ -1,9 +1,11 @@
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>
-#include <fuse.h>
 #include <sys/mman.h>
 #include <assert.h>
+
+#define FUSE_USE_VERSION 26
+#include <fuse.h>
 
 #include "params.h"
 
@@ -30,20 +32,27 @@ static void *sffs_init(struct fuse_conn_info *conn) {
     ((ull*)blocks[0])[2] = 1 + BMBLOCK_NUM + IBLOCK_NUM;
 
     // Fill bitmap blocks
-    for (uul i = 0; i < BMBLOCK_NUM; ++i) {
+    for (ull i = 0; i < BMBLOCK_NUM; ++i) {
         blocks[BMBLOCK_BEGIN + i] = new_block();
     }
 
     // Fill index blocks
-    for (uul i = 0; i < IBLOCK_NUM; ++i) {
+    for (ull i = 0; i < IBLOCK_NUM; ++i) {
         blocks[IBLOCK_BEGIN + i] = new_block();
     }
 
     return NULL;
 }
 
+static int sffs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset, struct fuse_file_info *fi) {
+    filler(buf, ".", NULL, 0);
+    filler(buf, "..", NULL, 0);
+    return 0;
+}
+
 static const struct fuse_operations op = {
     .init = sffs_init,
+    .readdir = sffs_readdir,
 };
 
 int main(int argc, char *argv[])

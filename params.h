@@ -9,7 +9,7 @@
 #define BMBLOCK_BEGIN 1
 #define BMBLOCK_NUM (BLOCK_NUM / 8 / BLOCK_SIZE)
 
-#define IBLOCK_BEGIN (1 + BM_BLOCK_NUM)
+#define IBLOCK_BEGIN (1 + BMBLOCK_NUM)
 #define IBLOCK_NUM 2
 
 #endif
