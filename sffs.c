@@ -99,7 +99,7 @@ ull find_attr_block(const char *path) {
 }
 
 void unmark_block(ull bid) {
-    // TODO: unset mark, set to NULL
+    // TODO: unset mark and set to NULL
 }
 
 static void *sffs_init(struct fuse_conn_info *conn) {
@@ -222,16 +222,15 @@ static int sffs_open(const char *path, struct fuse_file_info *fi) {
     return 0;
 }
 
+// TODO: offset ignored for now
 static int sffs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
     // Find the attr block
     ull bid = find_attr_block(path);
     if (bid == 0)
         return -ENOENT;
     attr_block_t * ab = (attr_block_t*)blocks[bid];
-    DEBUG("fname: %s", ab->name);
 
     // Locate the offset
-    // TODO: offset ignored for now
 
     // From beginning
     comm_block_t * cb = (comm_block_t*)ab;
@@ -248,10 +247,10 @@ static int sffs_read(const char *path, char *buf, size_t size, off_t offset, str
         }
         buf[seek] = cb->data[bseek++];
     }
-    DEBUG("fcontent: %s", buf);
     return seek;
 }
 
+// TODO: offset ignored for now
 static int sffs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
     // Find the attr block
     ull bid = find_attr_block(path);
@@ -260,7 +259,6 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
     attr_block_t * ab = (attr_block_t*)blocks[bid];
 
     // Locate the data block to write data
-    // TODO: offset ignored for now
 
     // From beginning
     ab->size = size;
