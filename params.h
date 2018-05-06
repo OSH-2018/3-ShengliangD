@@ -1,6 +1,10 @@
 #ifndef PARAMS_H
 #define PARAMS_H
 
+#include <time.h>
+
+typedef unsigned long long ull;
+
 #define FS_SIZE (4 * 1024 * 1024 * 1024ULL)
 
 #define BLOCK_SIZE (4 * 1024)
@@ -11,5 +15,32 @@
 
 #define IBLOCK_BEGIN (1 + BMBLOCK_NUM)
 #define IBLOCK_NUM 2
+#define INDEX_PER_BLOCK (BLOCK_SIZE / sizeof(ull))
+
+typedef struct {
+    ull prev;
+    ull next;
+} block_comm_t;
+
+#define BLOCK_CAP (BLOCK_SIZE - sizeof(block_comm_t))
+
+#define FNAME_LIMIT 1024
+
+typedef enum {
+    FT_FILE,  
+} ftype_t;
+
+typedef struct {
+    block_comm_t comm;
+    ftype_t type;
+    time_t time;    
+    ull size;
+    char name[FNAME_LIMIT];
+} attr_block_t;
+
+typedef struct {
+    block_comm_t comm;
+    unsigned char data[BLOCK_CAP];
+} comm_block_t;
 
 #endif
