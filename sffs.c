@@ -63,6 +63,19 @@ ull find_free_block() {
         return bid;
 }
 
+attr_block_t * find_attr_block(const char *path) {
+    for (ull i = 0; i < IBLOCK_NUM; ++i) {
+        for (ull j = 0; j < BLOCK_SIZE / sizeof (ull); ++j) {
+            int bid = ((ull*)blocks[IBLOCK_BEGIN + i])[j];
+            attr_block_t * attr = (attr_block_t *)blocks[bid];
+            if (bid != 0 && (strcmp(path+1, attr->name) == 0)) {
+                return attr;
+            }
+        }
+    }
+    return NULL;
+}
+
 void mark_block(ull bid) {
     // TODO: check if used
     ull bits = get_bitmap_of_block(bid);
@@ -145,24 +158,19 @@ static int sffs_getattr(const char *path, struct stat *stbuf) {
 
         return 0;
     } else {
-        // Find the entry, if found, fill the struct
-        for (ull i = 0; i < IBLOCK_NUM; ++i) {
-            for (ull j = 0; j < BLOCK_SIZE / sizeof (ull); ++j) {
-                int bid = ((ull*)blocks[IBLOCK_BEGIN + i])[j];
-                const attr_block_t * attr = (attr_block_t*)blocks[bid];                
-                if (bid != 0 && (strcmp(path+1, attr->name) == 0)) {
-                    memset(stbuf, 0, sizeof(struct stat));
-                    stbuf->st_mode = S_IFREG | 0755;
-                    stbuf->st_atime = stbuf->st_mtime = stbuf->st_ctime = attr->time;
-                    stbuf->st_uid = fuse_get_context()->uid;
-                    stbuf->st_gid = fuse_get_context()->gid;
-                    stbuf->st_nlink = 1;
+        // Find the first block of the file, which contains attributes
+        attr_block_t * ab = find_attr_block(path);
+        if (ab == NULL)
+            return -ENOENT;
 
-                    return 0;
-                }
-            }
-        }
-        return -ENOENT;
+        memset(stbuf, 0, sizeof(struct stat));
+        stbuf->st_mode = S_IFREG | 0755;
+        stbuf->st_atime = stbuf->st_mtime = stbuf->st_ctime = ab->time;
+        stbuf->st_uid = fuse_get_context()->uid;
+        stbuf->st_gid = fuse_get_context()->gid;
+        stbuf->st_nlink = 1;
+
+        return 0;
     }
     return -ENOENT;
 }
@@ -197,11 +205,51 @@ static int sffs_mknod(const char *path, mode_t mode, dev_t dev)
     return 0;
 }
 
+static int sffs_open(const char *path, struct fuse_file_info *fi) {
+    return 0;
+}
+
+static int sffs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+    return 0;
+}
+
+static int sffs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+    // Find the attr_block
+    attr_block_t * ab = find_attr_block(path);
+    if (ab == NULL)
+        return -ENOENT;
+    
+    // Locate the data block to write data
+    // TODO: offset ignored for now
+    // DOING
+    ull bseek = 0; // special value that specs this block end
+    // Write (blockid, offset in block)
+    for (size_t seek = 0; seek < size; ++seek) {
+
+    }
+
+    return 0;
+}
+
+static int sffs_unlink(const char *path)
+{
+    return 0;
+}
+
+static int sffs_truncate(const char *path, off_t size) {
+    return 0;
+}
+
 static const struct fuse_operations op = {
     .init = sffs_init,
     .readdir = sffs_readdir,
     .getattr = sffs_getattr,
     .mknod = sffs_mknod,
+    .open = sffs_open,
+    .read = sffs_read,
+    .write = sffs_write,
+    .unlink = sffs_unlink,
+    .truncate = sffs_truncate,
 };
 
 int main(int argc, char *argv[])
