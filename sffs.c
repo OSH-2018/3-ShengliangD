@@ -20,6 +20,18 @@
 
 void * blocks[BLOCK_NUM];
 
+void set_bitmap_64(ull bid, ull bits) {
+    bid = bid / 64;    
+    ull num_64_per_block = BLOCK_SIZE / sizeof(ull);
+    ((ull*)blocks[BMBLOCK_BEGIN + bid / num_64_per_block])[bid % num_64_per_block] = bits;
+}
+
+ull get_bitmap_of_block(ull bid) {
+    bid = bid / 64;
+    ull num_64_per_block = BLOCK_SIZE / sizeof(ull);
+    return ((ull*)blocks[BMBLOCK_BEGIN + bid / num_64_per_block])[bid % num_64_per_block];
+}
+
 void * new_block() {
     void * ret;
     assert ( (ret = mmap(NULL, BLOCK_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)) != MAP_FAILED );
@@ -42,18 +54,6 @@ int bits_find_0(ull bits) {
     return ret;
 }
 
-ull get_bitmap_of_block(ull bid) {
-    bid = bid / 64;
-    ull num_64_per_block = BLOCK_SIZE / sizeof(ull);
-    return ((ull*)blocks[BMBLOCK_BEGIN + bid / num_64_per_block])[bid % num_64_per_block];
-}
-
-void set_bitmap_64(ull bid, ull bits) {
-    bid = bid / 64;    
-    ull num_64_per_block = BLOCK_SIZE / sizeof(ull);
-    ((ull*)blocks[BMBLOCK_BEGIN + bid / num_64_per_block])[bid % num_64_per_block] = bits;
-}
-
 ull find_free_block() {
         ull bid;
         ull bitmap_64;
@@ -63,26 +63,39 @@ ull find_free_block() {
         return bid;
 }
 
-attr_block_t * find_attr_block(const char *path) {
+void mark_block(ull bid) {
+    // TODO: check if used
+    ull bits = get_bitmap_of_block(bid);
+    assert ( (bits & (1ULL << (bid % 64))) == 0 );
+    bits |= (1ULL << (bid % 64));
+    set_bitmap_64(bid, bits);
+}
+
+ull alloc_block() {
+    ull bid = find_free_block();
+
+    // TODO: judge if no free block
+
+    blocks[bid] = new_block();
+    mark_block(bid);
+
+    return bid;
+}
+
+void free_block() {
+}
+
+ull find_attr_block(const char *path) {
     for (ull i = 0; i < IBLOCK_NUM; ++i) {
         for (ull j = 0; j < BLOCK_SIZE / sizeof (ull); ++j) {
             int bid = ((ull*)blocks[IBLOCK_BEGIN + i])[j];
             attr_block_t * attr = (attr_block_t *)blocks[bid];
             if (bid != 0 && (strcmp(path+1, attr->name) == 0)) {
-                return attr;
+                return bid;
             }
         }
     }
-    return NULL;
-}
-
-void mark_block(ull bid) {
-    // TODO: check if used
-    ull bits = get_bitmap_of_block(bid);
-    DEBUG("bits=%llu, bid=%llu", bits, bid);
-    assert ( (bits & (1ULL << (bid % 64))) == 0 );
-    bits |= (1ULL << (bid % 64));
-    set_bitmap_64(bid, bits);
+    return 0;
 }
 
 void unmark_block(ull bid) {
@@ -159,9 +172,13 @@ static int sffs_getattr(const char *path, struct stat *stbuf) {
         return 0;
     } else {
         // Find the first block of the file, which contains attributes
-        attr_block_t * ab = find_attr_block(path);
-        if (ab == NULL)
-            return -ENOENT;
+        attr_block_t * ab;
+        {
+            ull bid = find_attr_block(path);
+            if (bid == 0)
+                return -ENOENT;
+            ab = (attr_block_t*)blocks[bid];            
+        }
 
         memset(stbuf, 0, sizeof(struct stat));
         stbuf->st_mode = S_IFREG | 0755;
@@ -169,6 +186,7 @@ static int sffs_getattr(const char *path, struct stat *stbuf) {
         stbuf->st_uid = fuse_get_context()->uid;
         stbuf->st_gid = fuse_get_context()->gid;
         stbuf->st_nlink = 1;
+        stbuf->st_size = ab->size;
 
         return 0;
     }
@@ -177,13 +195,8 @@ static int sffs_getattr(const char *path, struct stat *stbuf) {
 
 static int sffs_mknod(const char *path, mode_t mode, dev_t dev)
 {
-    // Find free block
-    ull bid = find_free_block();
-    
-    // Mark it as used and create block
-    mark_block(bid);
-    blocks[bid] = new_block();
-    
+    ull bid = alloc_block();
+
     // Add index info
     {
         ull iid = 0;
@@ -210,25 +223,66 @@ static int sffs_open(const char *path, struct fuse_file_info *fi) {
 }
 
 static int sffs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
-    return 0;
+    // Find the attr block
+    ull bid = find_attr_block(path);
+    if (bid == 0)
+        return -ENOENT;
+    attr_block_t * ab = (attr_block_t*)blocks[bid];
+    DEBUG("fname: %s", ab->name);
+
+    // Locate the offset
+    // TODO: offset ignored for now
+
+    // From beginning
+    comm_block_t * cb = (comm_block_t*)ab;
+    ull bseek = BLOCK_CAP;
+    // Read byte by byte
+    size_t seek;
+    for (seek = 0; seek < size; ++seek) {
+        if (bseek == BLOCK_CAP) {
+            if (cb->comm.next == 0) { // File end
+                break;
+            }
+            cb = (comm_block_t*)blocks[cb->comm.next];
+            bseek = 0;
+        }
+        buf[seek] = cb->data[bseek++];
+    }
+    DEBUG("fcontent: %s", buf);
+    return seek;
 }
 
 static int sffs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
-    // Find the attr_block
-    attr_block_t * ab = find_attr_block(path);
-    if (ab == NULL)
+    // Find the attr block
+    ull bid = find_attr_block(path);
+    if (bid == 0)
         return -ENOENT;
-    
+    attr_block_t * ab = (attr_block_t*)blocks[bid];
+
     // Locate the data block to write data
     // TODO: offset ignored for now
-    // DOING
-    ull bseek = 0; // special value that specs this block end
-    // Write (blockid, offset in block)
-    for (size_t seek = 0; seek < size; ++seek) {
 
+    // From beginning
+    ab->size = size;
+    comm_block_t * cb = (comm_block_t*)ab;
+    ull bseek = BLOCK_CAP; // special value that specs this block end
+    // Write byte by byte
+    size_t seek;
+    for (seek = 0; seek < size; ++seek) {
+        if (bseek == BLOCK_CAP) {  // Current block is full, goto next block
+            if (cb->comm.next == 0) {
+                cb->comm.next = alloc_block();
+                ((comm_block_t*)blocks[cb->comm.next])->comm.prev = bid;
+                cb = (comm_block_t*)blocks[bid];
+            }
+            bid = cb->comm.next;                        
+            cb = (comm_block_t*)blocks[bid];
+            bseek = 0;
+        }
+        cb->data[bseek++] = buf[seek];
     }
 
-    return 0;
+    return seek;
 }
 
 static int sffs_unlink(const char *path)
