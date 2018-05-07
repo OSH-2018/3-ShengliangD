@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+
 #include <errno.h>
 #include <sys/mman.h>
 #include <assert.h>
@@ -12,6 +13,9 @@
             fprintf(stderr,__VA_ARGS__);\
             fprintf(stderr, "\n");\
         }
+
+#define min(a, b) ((a)<=(b)?(a):(b))
+#define max(a, b) ((a)>=(b)?(a):(b))
 
 #define FUSE_USE_VERSION 26
 #include <fuse.h>
@@ -100,6 +104,18 @@ ull find_attr_block(const char *path) {
 
 void unmark_block(ull bid) {
     // TODO: unset mark and set to NULL
+}
+
+// Locate the cb and bseek to offset
+void locate(off_t offset, comm_block_t * * cb, ull * bseek) {
+    for (off_t ofst = 0; ofst < offset; ++ofst) {
+        if (*bseek == BLOCK_CAP) {
+            *cb = (comm_block_t*)blocks[(*cb)->comm.next];
+            *bseek = 0;
+        } else {
+            ++*bseek;
+        }
+    }
 }
 
 static void *sffs_init(struct fuse_conn_info *conn) {
@@ -219,7 +235,12 @@ static int sffs_mknod(const char *path, mode_t mode, dev_t dev)
 }
 
 static int sffs_open(const char *path, struct fuse_file_info *fi) {
-    return 0;
+    ull bid = find_attr_block(path);
+    DEBUG("open: path=%s, bid=%d", path);
+    if (bid == 0)
+        return -ENOENT;
+    else
+        return 0;
 }
 
 // TODO: offset ignored for now
@@ -228,43 +249,41 @@ static int sffs_read(const char *path, char *buf, size_t size, off_t offset, str
     ull bid = find_attr_block(path);
     if (bid == 0)
         return -ENOENT;
+
     attr_block_t * ab = (attr_block_t*)blocks[bid];
-
-    // Locate the offset
-
-    // From beginning
     comm_block_t * cb = (comm_block_t*)ab;
     ull bseek = BLOCK_CAP;
-    // Read byte by byte
+    locate(offset, &cb, &bseek);
+
     size_t seek;
-    for (seek = 0; seek < size; ++seek) {
+    for (seek = 0; seek < size && offset + seek < ab->size; ++seek) {
         if (bseek == BLOCK_CAP) {
             if (cb->comm.next == 0) { // File end
                 break;
             }
             cb = (comm_block_t*)blocks[cb->comm.next];
             bseek = 0;
+        } else {
+            ++bseek;
         }
-        buf[seek] = cb->data[bseek++];
+        buf[seek] = cb->data[bseek];
     }
+
     return seek;
 }
 
-// TODO: offset ignored for now
+// TODO: Assume offset is valid for now
 static int sffs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
     // Find the attr block
     ull bid = find_attr_block(path);
     if (bid == 0)
         return -ENOENT;
+
     attr_block_t * ab = (attr_block_t*)blocks[bid];
-
-    // Locate the data block to write data
-
-    // From beginning
-    ab->size = size;
     comm_block_t * cb = (comm_block_t*)ab;
     ull bseek = BLOCK_CAP; // special value that specs this block end
-    // Write byte by byte
+    locate(offset, &cb, &bseek);
+
     size_t seek;
     for (seek = 0; seek < size; ++seek) {
         if (bseek == BLOCK_CAP) {  // Current block is full, goto next block
@@ -276,9 +295,14 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
             bid = cb->comm.next;                        
             cb = (comm_block_t*)blocks[bid];
             bseek = 0;
+        } else {
+            ++bseek;
         }
-        cb->data[bseek++] = buf[seek];
+        cb->data[bseek] = buf[seek];
     }
+
+    ab->size = max(ab->size, offset + size);
+    time(&ab->time);    
 
     return seek;
 }
