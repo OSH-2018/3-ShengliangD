@@ -43,8 +43,8 @@ void * new_block() {
     return ret;
 }
 
-void delete_block(void * ptr) {
-    assert ( munmap(ptr, BLOCK_SIZE) != -1 );
+void delete_block(ull bid) {
+    assert ( munmap(blocks[bid], BLOCK_SIZE) != -1 );
 }
 
 // Find the first 0 bit
@@ -75,6 +75,13 @@ void mark_block(ull bid) {
     set_bitmap_64(bid, bits);
 }
 
+void unmark_block(ull bid) {
+    ull bits = get_bitmap_of_block(bid);
+    assert ( (bits | ~(1ULL << (bid % 64))) == 0xffffffffffffffff );    
+    bits &= ~(1ULL << (bid % 64));
+    set_bitmap_64(bid, bits);
+}
+
 ull alloc_block() {
     ull bid = find_free_block();
 
@@ -86,30 +93,34 @@ ull alloc_block() {
     return bid;
 }
 
-void free_block() {
+void free_block(ull bid) {
+    delete_block(bid);
+    unmark_block(bid);    
 }
 
-ull find_attr_block(const char *path) {
+int find_attr_block(const char *path, ull *iid, ull *bid, attr_block_t ** ab) {
     for (ull i = 0; i < IBLOCK_NUM; ++i) {
         for (ull j = 0; j < BLOCK_SIZE / sizeof (ull); ++j) {
-            int bid = ((ull*)blocks[IBLOCK_BEGIN + i])[j];
-            attr_block_t * attr = (attr_block_t *)blocks[bid];
-            if (bid != 0 && (strcmp(path+1, attr->name) == 0)) {
-                return bid;
+            ull tbid = ((ull*)blocks[IBLOCK_BEGIN + i])[j];
+            attr_block_t * attr = (attr_block_t *)blocks[tbid];
+            if (tbid != 0 && (strcmp(path+1, attr->name) == 0)) {
+                if (iid != NULL)
+                    *iid = i * (BLOCK_SIZE / sizeof(ull)) + j;
+                if (bid != NULL)
+                    *bid = tbid;
+                if (ab != NULL)
+                    *ab = attr;
+                return 0;
             }
         }
     }
-    return 0;
-}
-
-void unmark_block(ull bid) {
-    // TODO: unset mark and set to NULL
+    return -ENOENT;
 }
 
 // Locate the cb and bseek to offset
 void locate(off_t offset, comm_block_t * * cb, ull * bseek) {
     for (off_t ofst = 0; ofst < offset; ++ofst) {
-        if (*bseek == BLOCK_CAP) {
+        if (*bseek + 1 == BLOCK_CAP) {
             *cb = (comm_block_t*)blocks[(*cb)->comm.next];
             *bseek = 0;
         } else {
@@ -189,12 +200,8 @@ static int sffs_getattr(const char *path, struct stat *stbuf) {
     } else {
         // Find the first block of the file, which contains attributes
         attr_block_t * ab;
-        {
-            ull bid = find_attr_block(path);
-            if (bid == 0)
-                return -ENOENT;
-            ab = (attr_block_t*)blocks[bid];            
-        }
+        if (find_attr_block(path, NULL, NULL, &ab) != 0)
+            return -ENOENT;
 
         memset(stbuf, 0, sizeof(struct stat));
         stbuf->st_mode = S_IFREG | 0755;
@@ -235,9 +242,7 @@ static int sffs_mknod(const char *path, mode_t mode, dev_t dev)
 }
 
 static int sffs_open(const char *path, struct fuse_file_info *fi) {
-    ull bid = find_attr_block(path);
-    DEBUG("open: path=%s, bid=%d", path);
-    if (bid == 0)
+    if (find_attr_block(path, NULL, NULL, NULL) != 0)
         return -ENOENT;
     else
         return 0;
@@ -246,21 +251,17 @@ static int sffs_open(const char *path, struct fuse_file_info *fi) {
 // TODO: offset ignored for now
 static int sffs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
     // Find the attr block
-    ull bid = find_attr_block(path);
-    if (bid == 0)
+    attr_block_t * ab;
+    if (find_attr_block(path, NULL, NULL, &ab) != 0)
         return -ENOENT;
 
-    attr_block_t * ab = (attr_block_t*)blocks[bid];
     comm_block_t * cb = (comm_block_t*)ab;
-    ull bseek = BLOCK_CAP;
+    ull bseek = BLOCK_CAP - 1;
     locate(offset, &cb, &bseek);
 
     size_t seek;
     for (seek = 0; seek < size && offset + seek < ab->size; ++seek) {
-        if (bseek == BLOCK_CAP) {
-            if (cb->comm.next == 0) { // File end
-                break;
-            }
+        if (bseek + 1 == BLOCK_CAP) {
             cb = (comm_block_t*)blocks[cb->comm.next];
             bseek = 0;
         } else {
@@ -275,18 +276,19 @@ static int sffs_read(const char *path, char *buf, size_t size, off_t offset, str
 // TODO: Assume offset is valid for now
 static int sffs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
     // Find the attr block
-    ull bid = find_attr_block(path);
-    if (bid == 0)
+    ull bid;
+    attr_block_t * ab;
+    if (find_attr_block(path, NULL, &bid, &ab) != 0)
         return -ENOENT;
 
-    attr_block_t * ab = (attr_block_t*)blocks[bid];
     comm_block_t * cb = (comm_block_t*)ab;
-    ull bseek = BLOCK_CAP; // special value that specs this block end
+    ull bseek = BLOCK_CAP - 1; // special value that specs this block end
     locate(offset, &cb, &bseek);
 
     size_t seek;
     for (seek = 0; seek < size; ++seek) {
-        if (bseek == BLOCK_CAP) {  // Current block is full, goto next block
+        // 移动游标到待写入位置
+        if (bseek + 1 == BLOCK_CAP) {  // Current block is full, goto next block
             if (cb->comm.next == 0) {
                 cb->comm.next = alloc_block();
                 ((comm_block_t*)blocks[cb->comm.next])->comm.prev = bid;
@@ -298,6 +300,7 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
         } else {
             ++bseek;
         }
+        // 写入
         cb->data[bseek] = buf[seek];
     }
 
@@ -307,8 +310,21 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
     return seek;
 }
 
-static int sffs_unlink(const char *path)
-{
+static int sffs_unlink(const char *path) {
+    ull iid, bid;
+    if (find_attr_block(path, &iid, &bid, NULL) != 0)
+        return -ENOENT;
+
+    // Delete in index    
+    ((ull*)(blocks[IBLOCK_BEGIN + iid / (BLOCK_SIZE / sizeof(ull))]))[iid % (BLOCK_SIZE / sizeof(ull))] = 0;
+
+    // Free all the blocks
+    while (bid != 0) {
+        ull tbid = ((comm_block_t*)blocks[bid])->comm.next;
+        free_block(bid);
+        bid = tbid;
+    }
+
     return 0;
 }
 
