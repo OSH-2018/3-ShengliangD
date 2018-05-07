@@ -31,9 +31,15 @@ typedef enum {
 } ftype_t;
 
 typedef struct {
+    ull total_blocks;
+    ull used_blocks;
+} super_block_t;
+
+typedef struct {
     block_comm_t comm;
     ftype_t type;
-    time_t time;    
+    time_t atime;
+    time_t mtime;    
     ull size;
     char name[FNAME_LIMIT];
 } attr_block_t;

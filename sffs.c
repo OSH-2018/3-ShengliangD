@@ -85,17 +85,20 @@ void unmark_block(ull bid) {
 ull alloc_block() {
     ull bid = find_free_block();
 
-    // TODO: judge if no free block
+    // TODO: judge if there is no free block
 
     blocks[bid] = new_block();
     mark_block(bid);
+
+    ++(((super_block_t*)(blocks[0]))->used_blocks);
 
     return bid;
 }
 
 void free_block(ull bid) {
     delete_block(bid);
-    unmark_block(bid);    
+    unmark_block(bid);
+    --(((super_block_t*)(blocks[0]))->used_blocks);    
 }
 
 int find_attr_block(const char *path, ull *iid, ull *bid, attr_block_t ** ab) {
@@ -117,7 +120,9 @@ int find_attr_block(const char *path, ull *iid, ull *bid, attr_block_t ** ab) {
     return -ENOENT;
 }
 
-// Locate the cb and bseek to offset
+// Locate the cb and bseek to offset.
+// The resulting position is actually offset-1, because
+// we need to allocate new space if there isn't.
 void locate(off_t offset, comm_block_t * * cb, ull * bseek) {
     for (off_t ofst = 0; ofst < offset; ++ofst) {
         if (*bseek + 1 == BLOCK_CAP) {
@@ -156,6 +161,13 @@ static void *sffs_init(struct fuse_conn_info *conn) {
         mark_block(IBLOCK_BEGIN + i);
     }
 
+    // Fill the super block
+    {
+        super_block_t * sb = (super_block_t*)blocks[0];
+        sb->total_blocks = BLOCK_NUM;
+        sb->used_blocks = 1 + BMBLOCK_NUM + IBLOCK_NUM;
+    }
+
     return NULL;
 }
 
@@ -175,7 +187,7 @@ static int sffs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off
                 struct stat st;
                 memset(&st, 0, sizeof(st));
                 st.st_mode = S_IFREG | 0755;
-                st.st_atime = st.st_mtime = st.st_ctime = attr->time;
+                st.st_atime = st.st_mtime = st.st_ctime = attr->atime;
                 st.st_uid = fuse_get_context()->uid;
                 st.st_gid = fuse_get_context()->gid;
                 st.st_nlink = 1;
@@ -205,7 +217,8 @@ static int sffs_getattr(const char *path, struct stat *stbuf) {
 
         memset(stbuf, 0, sizeof(struct stat));
         stbuf->st_mode = S_IFREG | 0755;
-        stbuf->st_atime = stbuf->st_mtime = stbuf->st_ctime = ab->time;
+        stbuf->st_atime = ab->atime;
+        stbuf->st_mtime = ab->mtime;
         stbuf->st_uid = fuse_get_context()->uid;
         stbuf->st_gid = fuse_get_context()->gid;
         stbuf->st_nlink = 1;
@@ -234,7 +247,7 @@ static int sffs_mknod(const char *path, mode_t mode, dev_t dev)
     attr.comm.prev = attr.comm.next = 0;
     strncpy(attr.name, path + 1, FNAME_LIMIT);
     attr.size = 0;
-    time(&attr.time);
+    time(&attr.atime);
     attr.type = FT_FILE;
     memcpy(blocks[bid], &attr, sizeof(attr));
 
@@ -254,6 +267,7 @@ static int sffs_read(const char *path, char *buf, size_t size, off_t offset, str
     attr_block_t * ab;
     if (find_attr_block(path, NULL, NULL, &ab) != 0)
         return -ENOENT;
+    time(&ab->atime);
 
     comm_block_t * cb = (comm_block_t*)ab;
     ull bseek = BLOCK_CAP - 1;
@@ -280,6 +294,7 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
     attr_block_t * ab;
     if (find_attr_block(path, NULL, &bid, &ab) != 0)
         return -ENOENT;
+    time(&ab->mtime);
 
     comm_block_t * cb = (comm_block_t*)ab;
     ull bseek = BLOCK_CAP - 1; // special value that specs this block end
@@ -287,7 +302,6 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
 
     size_t seek;
     for (seek = 0; seek < size; ++seek) {
-        // 移动游标到待写入位置
         if (bseek + 1 == BLOCK_CAP) {  // Current block is full, goto next block
             if (cb->comm.next == 0) {
                 cb->comm.next = alloc_block();
@@ -299,12 +313,11 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
         } else {
             ++bseek;
         }
-        // 写入
         cb->data[bseek] = buf[seek];
     }
 
     ab->size = max(ab->size, offset + size);
-    time(&ab->time);    
+    time(&ab->atime);    
 
     return seek;
 }
@@ -328,6 +341,57 @@ static int sffs_unlink(const char *path) {
 }
 
 static int sffs_truncate(const char *path, off_t size) {
+    // Locate the file
+    attr_block_t * ab;
+    if (find_attr_block(path, NULL, NULL, &ab) != 0)
+        return -ENOENT;
+    time(&ab->mtime);
+
+    if (ab->size == size)
+        return 0;
+
+    if (ab->size > size) {  // If the file is larger, locate the seek and remove later blocks
+        comm_block_t * cb = (comm_block_t*)ab;
+        ull bseek = BLOCK_CAP - 1;
+        locate(size, &cb, &bseek);
+        
+        // TODO: Set the remaining of this block to 0
+        ab->size = size;        
+
+        // Free remaining blocks
+        ull bid = cb->comm.next;
+        cb->comm.next = 0;
+        while (bid != 0) {
+            ull tmp = ((comm_block_t*)blocks[bid])->comm.next;
+            free_block(bid);
+            bid = tmp;
+        }
+
+        return 0;
+    } else {  // The file is smaller, extent it and fill with zero
+        // I'm really lazy, use this inefficient method for now.
+        {
+            char * zeros = (char*)malloc(size - ab->size);
+            memset(zeros, 0, size - ab->size);
+            sffs_write(path, zeros, size - ab->size, ab->size, NULL);
+            free(zeros);
+        }
+        ab->size = size;
+
+        return 0;
+    }
+    return 0;
+}
+
+static int sffs_statfs(const char * path, struct statvfs *st) {
+    super_block_t * sb = (super_block_t*)blocks[0];
+
+    st->f_bsize = BLOCK_SIZE;
+    st->f_frsize = BLOCK_SIZE;
+    st->f_blocks = sb->total_blocks;
+    st->f_bfree = sb->total_blocks - sb->used_blocks;
+    st->f_bavail = sb->total_blocks - sb->used_blocks;
+
     return 0;
 }
 
@@ -341,6 +405,7 @@ static const struct fuse_operations op = {
     .write = sffs_write,
     .unlink = sffs_unlink,
     .truncate = sffs_truncate,
+    .statfs = sffs_statfs,
 };
 
 int main(int argc, char *argv[])
