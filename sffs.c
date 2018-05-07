@@ -292,7 +292,6 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
             if (cb->comm.next == 0) {
                 cb->comm.next = alloc_block();
                 ((comm_block_t*)blocks[cb->comm.next])->comm.prev = bid;
-                cb = (comm_block_t*)blocks[bid];
             }
             bid = cb->comm.next;                        
             cb = (comm_block_t*)blocks[bid];
