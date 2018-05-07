@@ -1,8 +1,15 @@
-test: sffs
-	./sffs tmp & sleep 0.2; cd tmp; bash; cd ..; sudo umount -f tmp
+try: sffs
+	mkdir -p tmp
+	./sffs tmp & sleep 0.2 && cd tmp && zsh && cd .. && sudo umount -f tmp
+	rmdir tmp
 
 debug: sffs
-	./sffs -d tmp & sleep 0.2; cd tmp; bash; cd ..; sudo umount -f tmp
+	mkdir -p tmp
+	./sffs -d tmp & sleep 0.2 && cd tmp && zsh && cd .. && sudo umount -f tmp
+	rmdir tmp
+
+test: sffs
+	./test.sh
 
 sffs: sffs.c
-	gcc -D_FILE_OFFSET_BITS=64 -o $@ $^ -lfuse -g
+	gcc -D_FILE_OFFSET_BITS=64 -o $@ $^ -lfuse -O3
