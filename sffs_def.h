@@ -1,5 +1,5 @@
-#ifndef PARAMS_H
-#define PARAMS_H
+#ifndef SFFS_DEF_H
+#define SFFS_DEF_H
 
 #include <time.h>
 
@@ -17,37 +17,39 @@ typedef unsigned long long ull;
 #define IBLOCK_NUM 2
 #define INDEX_PER_BLOCK (BLOCK_SIZE / sizeof(ull))
 
-typedef struct {
-    ull prev;
-    ull next;
-} block_comm_t;
-
-#define BLOCK_CAP (BLOCK_SIZE - sizeof(block_comm_t))
-
-#define FNAME_LIMIT 1024
-
-typedef enum {
-    FT_FILE,  
-} ftype_t;
-
+// Meta data of this entire file system, always the first block
 typedef struct {
     ull total_blocks;
     ull used_blocks;
 } super_block_t;
 
 typedef struct {
-    block_comm_t comm;
-    ftype_t type;
+    ull prev;
+    ull next;
+} chain_t;
+
+#define FNAME_LIMIT 255
+
+// Meta data of a file
+typedef struct {
+    chain_t chain;
+    char name[FNAME_LIMIT+1];
     time_t atime;
-    time_t mtime;    
+    time_t mtime;
     ull size;
-    char name[FNAME_LIMIT];
-    ull last_block;
 } attr_block_t;
 
+#define CBLOCK_CAP ((BLOCK_SIZE - sizeof(chain_t)) / sizeof(ull))
+
 typedef struct {
-    block_comm_t comm;
-    unsigned char data[BLOCK_CAP];
-} comm_block_t;
+    chain_t chain;
+    ull data_block_ids[CBLOCK_CAP];
+} chain_block_t;
+
+typedef struct {
+    ull chain_block_id;
+    ull chain_block_seek;
+    ull data_block_seek;
+} seek_tuple_t;
 
 #endif

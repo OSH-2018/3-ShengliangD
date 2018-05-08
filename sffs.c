@@ -20,7 +20,7 @@
 #define FUSE_USE_VERSION 26
 #include <fuse.h>
 
-#include "params.h"
+#include "sffs_def.h"
 
 void * blocks[BLOCK_NUM];
 
@@ -123,24 +123,24 @@ int find_attr_block(const char *path, ull *iid, ull *bid, attr_block_t ** ab) {
 // Locate the cb and bseek to offset.
 // The resulting position is actually offset-1, because
 // we need to allocate new space if there isn't.
-void locate(off_t offset, comm_block_t * * cb, ull * bseek) {
-    attr_block_t * ab = (*(attr_block_t**)cb);
-
-    if (offset == ab->size) {
-        *cb = (comm_block_t*)blocks[ab->last_block];
-        *bseek = (offset + BLOCK_CAP - 1) % BLOCK_CAP;
-    } else {
-        *cb = (comm_block_t*)ab;
-        *bseek = BLOCK_CAP - 1;
-
-        for (off_t ofst = 0; ofst < offset; ++ofst) {
-            if (*bseek + 1 == BLOCK_CAP) {
-                *cb = (comm_block_t*)blocks[(*cb)->comm.next];
-                *bseek = 0;
+void locate(off_t offset, const attr_block_t *ab, seek_tuple_t *st) {
+    st->chain_block_id = ab->chain.prev;
+    st->chain_block_seek = CBLOCK_CAP - 1;
+    st->data_block_seek = BLOCK_SIZE - 1;
+    for (off_t ofst = 0; ofst < offset; ++ofst) {
+        chain_block_t * cb = (chain_block_t*)blocks[st->chain_block_id];        
+        if (st->data_block_seek + 1 == BLOCK_SIZE) {
+            if (st->chain_block_seek + 1 == CBLOCK_CAP) {
+                st->chain_block_id = cb->chain.next;
+                st->chain_block_seek = 0;
             } else {
-                ++*bseek;
+                ++st->chain_block_seek;
             }
-        }    
+
+            st->data_block_seek = 0;
+        } else {
+            ++st->data_block_seek;
+        }
     }
 }
 
@@ -252,16 +252,15 @@ static int sffs_mknod(const char *path, mode_t mode, dev_t dev)
         ((ull*)blocks[IBLOCK_BEGIN + iid / INDEX_PER_BLOCK])[iid % INDEX_PER_BLOCK] = bid;
     }
 
-    // Fill file attr into the found block
+    // Fill file attr into the block
     attr_block_t attr;
-    attr.comm.prev = bid;
-    attr.comm.next = 0;
-    attr.last_block = bid;    
-    strncpy(attr.name, path + 1, FNAME_LIMIT);
-    attr.size = 0;
+    strncpy(attr.name, path + 1, FNAME_LIMIT + 1);
     time(&attr.atime);
-    attr.type = FT_FILE;
-    memcpy(blocks[bid], &attr, sizeof(attr));
+    time(&attr.mtime);
+    attr.size = 0;
+    attr.chain.prev = bid;
+    attr.chain.next = 0;
+    memcpy(blocks[bid], &attr, sizeof(attr));    
 
     return 0;
 }
@@ -281,19 +280,26 @@ static int sffs_read(const char *path, char *buf, size_t size, off_t offset, str
         return -ENOENT;
     time(&ab->atime);
 
-    comm_block_t * cb = (comm_block_t*)ab;
-    ull bseek = BLOCK_CAP - 1;
-    locate(offset, &cb, &bseek);
+    seek_tuple_t st;
+    locate(offset, ab, &st);
 
     size_t seek;
     for (seek = 0; seek < size && offset + seek < ab->size; ++seek) {
-        if (bseek + 1 == BLOCK_CAP) {
-            cb = (comm_block_t*)blocks[cb->comm.next];
-            bseek = 0;
+        chain_block_t * cb = (chain_block_t*)blocks[st.chain_block_id];        
+        if (st.data_block_seek + 1 == BLOCK_SIZE) {
+            if (st.chain_block_seek + 1 == CBLOCK_CAP) {
+                st.chain_block_id = cb->chain.next;
+                st.chain_block_seek = 0;
+                cb = (chain_block_t*)blocks[st.chain_block_id];                
+            } else {
+                ++st.chain_block_seek;
+            }
+
+            st.data_block_seek = 0;
         } else {
-            ++bseek;
+            ++st.data_block_seek;
         }
-        buf[seek] = cb->data[bseek];
+        buf[seek] = ((char*)blocks[cb->data_block_ids[st.chain_block_seek]])[st.data_block_seek];
     }
 
     return seek;
@@ -318,25 +324,32 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
 
     time(&ab->mtime);
 
-    comm_block_t * cb = (comm_block_t*)ab;
-    ull bseek = BLOCK_CAP - 1; // special value that specs this block end
-    locate(offset, &cb, &bseek);
+    seek_tuple_t st;
+    locate(offset, ab, &st);
 
     size_t seek;
     for (seek = 0; seek < size; ++seek) {
-        if (bseek + 1 == BLOCK_CAP) {  // Current block is full, goto next block
-            if (cb->comm.next == 0) {
-                cb->comm.next = alloc_block();
-                ab->last_block = cb->comm.next;
-                ((comm_block_t*)blocks[cb->comm.next])->comm.prev = bid;
+        chain_block_t * cb = (chain_block_t*)blocks[st.chain_block_id];        
+        if (st.data_block_seek + 1 == BLOCK_SIZE) {  // Need to allocate new data block
+            // Allocate new data block and update data_block_seek
+            if (st.chain_block_seek + 1 == CBLOCK_CAP) {  // Need to allocate new chain block
+                // Allocate new chain block and update chain_block_seek
+                cb->chain.next = alloc_block();
+
+                st.chain_block_id = cb->chain.next;
+                st.chain_block_seek = 0;
+
+                cb = (chain_block_t*)blocks[st.chain_block_id];
+            } else {
+                ++st.chain_block_seek;
             }
-            bid = cb->comm.next;                        
-            cb = (comm_block_t*)blocks[bid];
-            bseek = 0;
-        } else {
-            ++bseek;
+
+            cb->data_block_ids[st.chain_block_seek] = alloc_block();
+            st.data_block_seek = 0;
+        } else {  // Update seek normally
+            ++st.data_block_seek;
         }
-        cb->data[bseek] = buf[seek];
+        ((char*)blocks[cb->data_block_ids[st.chain_block_seek]])[st.data_block_seek] = buf[seek];
     }
 
     ab->size = max(ab->size, offset + size);
@@ -353,57 +366,57 @@ static int sffs_unlink(const char *path) {
     // Delete in index    
     ((ull*)(blocks[IBLOCK_BEGIN + iid / (BLOCK_SIZE / sizeof(ull))]))[iid % (BLOCK_SIZE / sizeof(ull))] = 0;
 
-    // Free all the blocks
-    while (bid != 0) {
-        ull tbid = ((comm_block_t*)blocks[bid])->comm.next;
-        free_block(bid);
-        bid = tbid;
-    }
+    // // Free all the blocks
+    // while (bid != 0) {
+    //     ull tbid = ((comm_block_t*)blocks[bid])->comm.next;
+    //     free_block(bid);
+    //     bid = tbid;
+    // }
 
     return 0;
 }
 
 static int sffs_truncate(const char *path, off_t size) {
-    // Locate the file
-    attr_block_t * ab;
-    if (find_attr_block(path, NULL, NULL, &ab) != 0)
-        return -ENOENT;
-    time(&ab->mtime);
+    // // Locate the file
+    // attr_block_t * ab;
+    // if (find_attr_block(path, NULL, NULL, &ab) != 0)
+    //     return -ENOENT;
+    // time(&ab->mtime);
 
-    if (ab->size == size)
-        return 0;
+    // if (ab->size == size)
+    //     return 0;
 
-    if (ab->size > size) {  // If the file is larger, locate the seek and remove later blocks
-        comm_block_t * cb = (comm_block_t*)ab;
-        ull bseek = BLOCK_CAP - 1;
-        locate(size, &cb, &bseek);
+    // if (ab->size > size) {  // If the file is larger, locate the seek and remove later blocks
+    //     comm_block_t * cb = (comm_block_t*)ab;
+    //     ull bseek = BLOCK_CAP - 1;
+    //     locate(size, &cb, &bseek);
         
-        // TODO: Set the remaining of this block to 0
-        ab->size = size;
-        ab->last_block = cb->comm.prev;
+    //     // TODO: Set the remaining of this block to 0
+    //     ab->size = size;
+    //     ab->last_block = cb->comm.prev;
 
-        // Free remaining blocks
-        ull bid = cb->comm.next;
-        cb->comm.next = 0;
-        while (bid != 0) {
-            ull tmp = ((comm_block_t*)blocks[bid])->comm.next;
-            free_block(bid);
-            bid = tmp;
-        }
+    //     // Free remaining blocks
+    //     ull bid = cb->comm.next;
+    //     cb->comm.next = 0;
+    //     while (bid != 0) {
+    //         ull tmp = ((comm_block_t*)blocks[bid])->comm.next;
+    //         free_block(bid);
+    //         bid = tmp;
+    //     }
 
-        return 0;
-    } else {  // The file is smaller, extent it and fill with zero
-        // I'm really lazy, use this inefficient method for now.
-        {
-            char * zeros = (char*)malloc(size - ab->size);
-            memset(zeros, 0, size - ab->size);
-            sffs_write(path, zeros, size - ab->size, ab->size, NULL);
-            free(zeros);
-        }
-        ab->size = size;
+    //     return 0;
+    // } else {  // The file is smaller, extent it and fill with zero
+    //     // I'm really lazy, use this inefficient method for now.
+    //     {
+    //         char * zeros = (char*)malloc(size - ab->size);
+    //         memset(zeros, 0, size - ab->size);
+    //         sffs_write(path, zeros, size - ab->size, ab->size, NULL);
+    //         free(zeros);
+    //     }
+    //     ab->size = size;
 
-        return 0;
-    }
+    //     return 0;
+    // }
     return 0;
 }
 
