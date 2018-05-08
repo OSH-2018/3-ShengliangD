@@ -124,13 +124,23 @@ int find_attr_block(const char *path, ull *iid, ull *bid, attr_block_t ** ab) {
 // The resulting position is actually offset-1, because
 // we need to allocate new space if there isn't.
 void locate(off_t offset, comm_block_t * * cb, ull * bseek) {
-    for (off_t ofst = 0; ofst < offset; ++ofst) {
-        if (*bseek + 1 == BLOCK_CAP) {
-            *cb = (comm_block_t*)blocks[(*cb)->comm.next];
-            *bseek = 0;
-        } else {
-            ++*bseek;
-        }
+    attr_block_t * ab = (*(attr_block_t**)cb);
+
+    if (offset == ab->size) {
+        *cb = (comm_block_t*)blocks[ab->last_block];
+        *bseek = (offset + BLOCK_CAP - 1) % BLOCK_CAP;
+    } else {
+        *cb = (comm_block_t*)ab;
+        *bseek = BLOCK_CAP - 1;
+
+        for (off_t ofst = 0; ofst < offset; ++ofst) {
+            if (*bseek + 1 == BLOCK_CAP) {
+                *cb = (comm_block_t*)blocks[(*cb)->comm.next];
+                *bseek = 0;
+            } else {
+                ++*bseek;
+            }
+        }    
     }
 }
 
@@ -244,7 +254,9 @@ static int sffs_mknod(const char *path, mode_t mode, dev_t dev)
 
     // Fill file attr into the found block
     attr_block_t attr;
-    attr.comm.prev = attr.comm.next = 0;
+    attr.comm.prev = bid;
+    attr.comm.next = 0;
+    attr.last_block = bid;    
     strncpy(attr.name, path + 1, FNAME_LIMIT);
     attr.size = 0;
     time(&attr.atime);
@@ -305,6 +317,7 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
         if (bseek + 1 == BLOCK_CAP) {  // Current block is full, goto next block
             if (cb->comm.next == 0) {
                 cb->comm.next = alloc_block();
+                ab->last_block = cb->comm.next;
                 ((comm_block_t*)blocks[cb->comm.next])->comm.prev = bid;
             }
             bid = cb->comm.next;                        
@@ -356,7 +369,8 @@ static int sffs_truncate(const char *path, off_t size) {
         locate(size, &cb, &bseek);
         
         // TODO: Set the remaining of this block to 0
-        ab->size = size;        
+        ab->size = size;
+        ab->last_block = cb->comm.prev;
 
         // Free remaining blocks
         ull bid = cb->comm.next;

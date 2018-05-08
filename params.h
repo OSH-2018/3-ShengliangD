@@ -42,6 +42,7 @@ typedef struct {
     time_t mtime;    
     ull size;
     char name[FNAME_LIMIT];
+    ull last_block;
 } attr_block_t;
 
 typedef struct {
