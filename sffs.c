@@ -306,6 +306,16 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
     attr_block_t * ab;
     if (find_attr_block(path, NULL, &bid, &ab) != 0)
         return -ENOENT;
+    
+    // Judge if there is enough space
+    {
+        super_block_t * sb = (super_block_t*)blocks[0];
+        ull avail_blocks = sb->total_blocks - sb->used_blocks;
+        ull need_blocks = (offset + size + BLOCK_SIZE - 1) / BLOCK_SIZE - (ab->size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        if (need_blocks > avail_blocks)
+            return -E2BIG;
+    }
+
     time(&ab->mtime);
 
     comm_block_t * cb = (comm_block_t*)ab;
