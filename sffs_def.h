@@ -39,6 +39,9 @@ typedef struct {
     char name[FNAME_LIMIT+1];
     time_t atime;
     time_t mtime;
+    mode_t mode;
+    uid_t uid;
+    gid_t gid;
     ull size;
 } attr_block_t;
 

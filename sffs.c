@@ -94,11 +94,11 @@ static int sffs_getattr(const char *path, struct stat *stbuf) {
             return -ENOENT;
 
         memset(stbuf, 0, sizeof(struct stat));
-        stbuf->st_mode = S_IFREG | 0755;
+        stbuf->st_mode = S_IFREG | ab->mode;
         stbuf->st_atime = ab->atime;
         stbuf->st_mtime = ab->mtime;
-        stbuf->st_uid = fuse_get_context()->uid;
-        stbuf->st_gid = fuse_get_context()->gid;
+        stbuf->st_uid = ab->uid;
+        stbuf->st_gid = ab->gid;
         stbuf->st_nlink = 1;
         stbuf->st_size = ab->size;
 
@@ -125,6 +125,9 @@ static int sffs_mknod(const char *path, mode_t mode, dev_t dev)
     strncpy(attr->name, path + 1, FNAME_LIMIT + 1);
     time(&attr->atime);
     time(&attr->mtime);
+    attr->uid = fuse_get_context()->uid;
+    attr->gid = fuse_get_context()->gid;
+    attr->mode = 0644 & ~fuse_get_context()->umask;
     attr->size = 0;
     attr->chain.prev = bid;
     attr->chain.next = 0;
@@ -266,6 +269,37 @@ static int sffs_statfs(const char * path, struct statvfs *st) {
     return 0;
 }
 
+static int sffs_chmod(const char * path, mode_t mode, struct fuse_file_info *fi) {
+    attr_block_t * ab;
+    if (find_attr_block(path, NULL, NULL, &ab) != 0)
+        return -ENOENT;
+
+    ab->mode = mode;
+
+    return 0;    
+}
+
+static int sffs_chown(const char * path, uid_t uid, gid_t gid, struct fuse_file_info *fi) {
+    attr_block_t * ab;
+    if (find_attr_block(path, NULL, NULL, &ab) != 0)
+        return -ENOENT;
+
+    ab->uid = uid;
+    ab->gid = gid;    
+
+    return 0; 
+}
+
+static int sffs_utimens(const char * path, const struct timespec tv[2], struct fuse_file_info *fi) {
+        attr_block_t * ab;
+    if (find_attr_block(path, NULL, NULL, &ab) != 0)
+        return -ENOENT;
+
+    ab->mtime = ab->atime = tv->tv_sec;
+
+    return 0;
+}
+
 static const struct fuse_operations op = {
     .init = sffs_init,
     .readdir = sffs_readdir,
@@ -277,6 +311,9 @@ static const struct fuse_operations op = {
     .unlink = sffs_unlink,
     .truncate = sffs_truncate,
     .statfs = sffs_statfs,
+    .chmod = sffs_chmod,
+    .chown = sffs_chown,
+    .utimens = sffs_utimens,
 };
 
 int main(int argc, char *argv[])
