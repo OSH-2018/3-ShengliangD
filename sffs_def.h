@@ -46,6 +46,7 @@ typedef struct {
     ull data_block_ids[CBLOCK_CAP];
 } chain_block_t;
 
+// NOTE: seek_tuple_t will always be one step before the position to operate
 typedef struct {
     ull chain_block_id;
     ull chain_block_seek;

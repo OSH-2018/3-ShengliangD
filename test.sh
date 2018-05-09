@@ -22,6 +22,10 @@ test_basic() {
     cp $tmp_file $tfile
     diff $tmp_file $tfile
 
+    dd if=$tmp_file of=$tmp_file bs=11k count=1 seek=2 2>/dev/null
+    dd if=$tfile of=$tfile bs=11k count=1 seek=2 2>/dev/null
+    diff $tmp_file $tfile
+
     ret=$?
     [ ! $? ] && echo "Failed: test_basic"
 

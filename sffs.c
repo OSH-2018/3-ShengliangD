@@ -31,7 +31,7 @@ void set_bitmap_64(ull bid, ull bits) {
 }
 
 ull get_bitmap_of_block(ull bid) {
-    bid = bid / 64;
+    bid = bid / (8*sizeof(ull));
     ull num_64_per_block = BLOCK_SIZE / sizeof(ull);
     return ((ull*)blocks[BMBLOCK_BEGIN + bid / num_64_per_block])[bid % num_64_per_block];
 }
@@ -98,7 +98,47 @@ ull alloc_block() {
 void free_block(ull bid) {
     delete_block(bid);
     unmark_block(bid);
+    blocks[bid] = 0;
     --(((super_block_t*)(blocks[0]))->used_blocks);    
+}
+
+void free_space(seek_tuple_t st) {
+    // Fill the remaining of the current data block with 0, then goto next data block
+    {
+        chain_block_t * cb = (chain_block_t*)blocks[st.chain_block_id];
+        memset(
+            (char*)blocks[cb->data_block_ids[st.chain_block_seek]] + st.data_block_seek + 1,
+            0,
+            BLOCK_SIZE - st.data_block_seek - 1
+        );
+        st.data_block_seek = BLOCK_SIZE - 1;
+    }
+
+    // Free all the data blocks in current chain block, then goto next chain block
+    {
+        chain_block_t * cb = (chain_block_t*)blocks[st.chain_block_id];        
+        while (st.chain_block_seek + 1 < CBLOCK_CAP && cb->data_block_ids[st.chain_block_seek + 1] != 0) {
+            free_block(cb->data_block_ids[st.chain_block_seek + 1]);
+            ++st.chain_block_seek;
+        }
+    }
+
+    // Then free all that remains
+    {
+        chain_block_t * cb = (chain_block_t*)blocks[st.chain_block_id];
+        while (cb->chain.next != 0) {
+            st.chain_block_id = cb->chain.next;
+            chain_block_t * tcb = (chain_block_t*)blocks[cb->chain.next];
+            cb->chain.next = tcb->chain.next;
+
+            st.chain_block_seek = 0;
+            while (st.chain_block_seek < CBLOCK_CAP && tcb->data_block_ids[st.chain_block_seek] != 0) {
+                free_block(tcb->data_block_ids[st.chain_block_seek]);
+                ++st.chain_block_seek;
+            }
+            free_block(st.chain_block_id);
+        }
+    }
 }
 
 int find_attr_block(const char *path, ull *iid, ull *bid, attr_block_t ** ab) {
@@ -144,32 +184,37 @@ void locate(off_t offset, const attr_block_t *ab, seek_tuple_t *st) {
     }
 }
 
-void next_chain_block(seek_tuple_t *sk) {
+void next_chain_block(seek_tuple_t *st, int alloc) {
+    chain_block_t * cb = (chain_block_t*)blocks[st->chain_block_id];    
 
+    if (alloc && cb->chain.next == 0)
+        cb->chain.next = alloc_block();
+
+    st->chain_block_id = cb->chain.next;
+    st->chain_block_seek = 0;
+
+    cb = (chain_block_t*)blocks[st->chain_block_id];
 }
 
-void next_data_block(seek_tuple_t *st) {
+void next_data_block(seek_tuple_t *st, int alloc) {
+    chain_block_t * cb = (chain_block_t*)blocks[st->chain_block_id];    
+   
+    if (st->chain_block_seek + 1 == CBLOCK_CAP) {
+        next_chain_block(st, alloc);
+    } else {
+        ++st->chain_block_seek;
+    }
+    
+    if (alloc && cb->data_block_ids[st->chain_block_seek] == 0)
+        cb->data_block_ids[st->chain_block_seek] = alloc_block();
 
+    st->data_block_seek = 0;
 }
 
 void next_byte(seek_tuple_t *st, int alloc) {
     chain_block_t * cb = (chain_block_t*)blocks[st->chain_block_id];
     if (st->data_block_seek + 1 == BLOCK_SIZE) {
-        if (st->chain_block_seek + 1 == CBLOCK_CAP) {
-            if (alloc && cb->chain.next == 0)
-                cb->chain.next = alloc_block();
-
-            st->chain_block_id = cb->chain.next;
-            st->chain_block_seek = 0;
-
-            cb = (chain_block_t*)blocks[st->chain_block_id];
-        } else {
-            ++st->chain_block_seek;
-        }
-        if (alloc && cb->data_block_ids[st->chain_block_seek] == 0)
-            cb->data_block_ids[st->chain_block_seek] = alloc_block();
-
-        st->data_block_seek = 0;
+        next_data_block(st, alloc);
     } else {
         ++st->data_block_seek;
     }
@@ -363,63 +408,48 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
 
 static int sffs_unlink(const char *path) {
     ull iid, bid;
-    if (find_attr_block(path, &iid, &bid, NULL) != 0)
+    attr_block_t *ab;
+    if (find_attr_block(path, &iid, &bid, &ab) != 0)
         return -ENOENT;
 
     // Delete in index    
     ((ull*)(blocks[IBLOCK_BEGIN + iid / (BLOCK_SIZE / sizeof(ull))]))[iid % (BLOCK_SIZE / sizeof(ull))] = 0;
 
-    // // Free all the blocks
-    // while (bid != 0) {
-    //     ull tbid = ((comm_block_t*)blocks[bid])->comm.next;
-    //     free_block(bid);
-    //     bid = tbid;
-    // }
+    seek_tuple_t st;
+    locate(0, ab, &st);
+
+    // Free all the blocks
+    free_space(st);
+    free_block(bid);
 
     return 0;
 }
 
 static int sffs_truncate(const char *path, off_t size) {
-    // // Locate the file
-    // attr_block_t * ab;
-    // if (find_attr_block(path, NULL, NULL, &ab) != 0)
-    //     return -ENOENT;
-    // time(&ab->mtime);
+    // Locate the file
+    attr_block_t * ab;
+    if (find_attr_block(path, NULL, NULL, &ab) != 0)
+        return -ENOENT;
+    time(&ab->mtime);
 
-    // if (ab->size == size)
-    //     return 0;
+    if (ab->size == size)
+        return 0;
 
-    // if (ab->size > size) {  // If the file is larger, locate the seek and remove later blocks
-    //     comm_block_t * cb = (comm_block_t*)ab;
-    //     ull bseek = BLOCK_CAP - 1;
-    //     locate(size, &cb, &bseek);
-        
-    //     // TODO: Set the remaining of this block to 0
-    //     ab->size = size;
-    //     ab->last_block = cb->comm.prev;
+    if (ab->size > size) {  // If the file is larger, locate the seek and remove later blocks
+        seek_tuple_t st;
+        locate(size, ab, &st);
+        free_space(st);
+    } else {  // The file is smaller, extent it and fill with zero
+        // I'm really lazy, use this inefficient method for now.
+        {
+            char * zeros = (char*)malloc(size - ab->size);
+            memset(zeros, 0, size - ab->size);
+            sffs_write(path, zeros, size - ab->size, ab->size, NULL);
+            free(zeros);
+        }
+    }
+    ab->size = size;
 
-    //     // Free remaining blocks
-    //     ull bid = cb->comm.next;
-    //     cb->comm.next = 0;
-    //     while (bid != 0) {
-    //         ull tmp = ((comm_block_t*)blocks[bid])->comm.next;
-    //         free_block(bid);
-    //         bid = tmp;
-    //     }
-
-    //     return 0;
-    // } else {  // The file is smaller, extent it and fill with zero
-    //     // I'm really lazy, use this inefficient method for now.
-    //     {
-    //         char * zeros = (char*)malloc(size - ab->size);
-    //         memset(zeros, 0, size - ab->size);
-    //         sffs_write(path, zeros, size - ab->size, ab->size, NULL);
-    //         free(zeros);
-    //     }
-    //     ab->size = size;
-
-    //     return 0;
-    // }
     return 0;
 }
 
