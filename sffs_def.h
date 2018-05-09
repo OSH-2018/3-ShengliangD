@@ -3,6 +3,9 @@
 
 #include <time.h>
 
+#define FUSE_USE_VERSION 26
+#include <fuse.h>
+
 typedef unsigned long long ull;
 
 #define FS_SIZE (4 * 1024 * 1024 * 1024ULL)
