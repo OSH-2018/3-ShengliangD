@@ -142,7 +142,6 @@ static int sffs_open(const char *path, struct fuse_file_info *fi) {
         return 0;
 }
 
-// TODO: offset ignored for now
 static int sffs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
     // Find the attr block
     attr_block_t * ab;
@@ -168,7 +167,6 @@ static int sffs_read(const char *path, char *buf, size_t size, off_t offset, str
     return seek;
 }
 
-// TODO: Assume offset is valid for now
 static int sffs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
     // Find the attr block
     ull bid;
@@ -269,7 +267,7 @@ static int sffs_statfs(const char * path, struct statvfs *st) {
     return 0;
 }
 
-static int sffs_chmod(const char * path, mode_t mode, struct fuse_file_info *fi) {
+static int sffs_chmod(const char * path, mode_t mode) {
     attr_block_t * ab;
     if (find_attr_block(path, NULL, NULL, &ab) != 0)
         return -ENOENT;
@@ -279,7 +277,7 @@ static int sffs_chmod(const char * path, mode_t mode, struct fuse_file_info *fi)
     return 0;    
 }
 
-static int sffs_chown(const char * path, uid_t uid, gid_t gid, struct fuse_file_info *fi) {
+static int sffs_chown(const char * path, uid_t uid, gid_t gid) {
     attr_block_t * ab;
     if (find_attr_block(path, NULL, NULL, &ab) != 0)
         return -ENOENT;
@@ -290,7 +288,7 @@ static int sffs_chown(const char * path, uid_t uid, gid_t gid, struct fuse_file_
     return 0; 
 }
 
-static int sffs_utimens(const char * path, const struct timespec tv[2], struct fuse_file_info *fi) {
+static int sffs_utimens(const char * path, const struct timespec tv[2]) {
         attr_block_t * ab;
     if (find_attr_block(path, NULL, NULL, &ab) != 0)
         return -ENOENT;
