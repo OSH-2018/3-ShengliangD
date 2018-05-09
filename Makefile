@@ -13,3 +13,6 @@ sffs: sffs.o sffs_blocks.o
 
 %.o: %.c
 	gcc -D_FILE_OFFSET_BITS=64 -c -o $@ $^
+
+clean:
+	rm -rf *.o sffs

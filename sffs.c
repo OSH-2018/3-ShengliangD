@@ -269,7 +269,7 @@ static int sffs_statfs(const char * path, struct statvfs *st) {
     return 0;
 }
 
-static int sffs_chmod(const char * path, mode_t mode, struct fuse_file_info *fi) {
+static int sffs_chmod(const char * path, mode_t mode) {
     attr_block_t * ab;
     if (find_attr_block(path, NULL, NULL, &ab) != 0)
         return -ENOENT;
@@ -279,7 +279,7 @@ static int sffs_chmod(const char * path, mode_t mode, struct fuse_file_info *fi)
     return 0;    
 }
 
-static int sffs_chown(const char * path, uid_t uid, gid_t gid, struct fuse_file_info *fi) {
+static int sffs_chown(const char * path, uid_t uid, gid_t gid) {
     attr_block_t * ab;
     if (find_attr_block(path, NULL, NULL, &ab) != 0)
         return -ENOENT;
@@ -290,7 +290,7 @@ static int sffs_chown(const char * path, uid_t uid, gid_t gid, struct fuse_file_
     return 0; 
 }
 
-static int sffs_utimens(const char * path, const struct timespec tv[2], struct fuse_file_info *fi) {
+static int sffs_utimens(const char * path, const struct timespec tv[2]) {
         attr_block_t * ab;
     if (find_attr_block(path, NULL, NULL, &ab) != 0)
         return -ENOENT;
