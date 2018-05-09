@@ -127,7 +127,7 @@ void locate(off_t offset, const attr_block_t *ab, seek_tuple_t *st) {
     st->chain_block_id = ab->chain.prev;
     st->chain_block_seek = CBLOCK_CAP - 1;
     st->data_block_seek = BLOCK_SIZE - 1;
-    for (off_t ofst = 0; ofst < offset; ++ofst) {
+    for (off_t ofst = 0; ofst < offset && ofst < ab->size; ++ofst) {
         chain_block_t * cb = (chain_block_t*)blocks[st->chain_block_id];        
         if (st->data_block_seek + 1 == BLOCK_SIZE) {
             if (st->chain_block_seek + 1 == CBLOCK_CAP) {
@@ -141,6 +141,37 @@ void locate(off_t offset, const attr_block_t *ab, seek_tuple_t *st) {
         } else {
             ++st->data_block_seek;
         }
+    }
+}
+
+void next_chain_block(seek_tuple_t *sk) {
+
+}
+
+void next_data_block(seek_tuple_t *st) {
+
+}
+
+void next_byte(seek_tuple_t *st, int alloc) {
+    chain_block_t * cb = (chain_block_t*)blocks[st->chain_block_id];
+    if (st->data_block_seek + 1 == BLOCK_SIZE) {
+        if (st->chain_block_seek + 1 == CBLOCK_CAP) {
+            if (alloc && cb->chain.next == 0)
+                cb->chain.next = alloc_block();
+
+            st->chain_block_id = cb->chain.next;
+            st->chain_block_seek = 0;
+
+            cb = (chain_block_t*)blocks[st->chain_block_id];
+        } else {
+            ++st->chain_block_seek;
+        }
+        if (alloc && cb->data_block_ids[st->chain_block_seek] == 0)
+            cb->data_block_ids[st->chain_block_seek] = alloc_block();
+
+        st->data_block_seek = 0;
+    } else {
+        ++st->data_block_seek;
     }
 }
 
@@ -285,20 +316,8 @@ static int sffs_read(const char *path, char *buf, size_t size, off_t offset, str
 
     size_t seek;
     for (seek = 0; seek < size && offset + seek < ab->size; ++seek) {
+        next_byte(&st, 0);
         chain_block_t * cb = (chain_block_t*)blocks[st.chain_block_id];        
-        if (st.data_block_seek + 1 == BLOCK_SIZE) {
-            if (st.chain_block_seek + 1 == CBLOCK_CAP) {
-                st.chain_block_id = cb->chain.next;
-                st.chain_block_seek = 0;
-                cb = (chain_block_t*)blocks[st.chain_block_id];                
-            } else {
-                ++st.chain_block_seek;
-            }
-
-            st.data_block_seek = 0;
-        } else {
-            ++st.data_block_seek;
-        }
         buf[seek] = ((char*)blocks[cb->data_block_ids[st.chain_block_seek]])[st.data_block_seek];
     }
 
@@ -317,9 +336,11 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
     {
         super_block_t * sb = (super_block_t*)blocks[0];
         ull avail_blocks = sb->total_blocks - sb->used_blocks;
-        ull need_blocks = (offset + size + BLOCK_SIZE - 1) / BLOCK_SIZE - (ab->size + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        if (need_blocks > avail_blocks)
-            return -E2BIG;
+        if (size + offset > ab->size) {
+            ull need_blocks = (offset + size + BLOCK_SIZE - 1) / BLOCK_SIZE - (ab->size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+            if (need_blocks > avail_blocks)
+                return -E2BIG;
+        }
     }
 
     time(&ab->mtime);
@@ -329,30 +350,12 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
 
     size_t seek;
     for (seek = 0; seek < size; ++seek) {
-        chain_block_t * cb = (chain_block_t*)blocks[st.chain_block_id];        
-        if (st.data_block_seek + 1 == BLOCK_SIZE) {  // Need to allocate new data block
-            // Allocate new data block and update data_block_seek
-            if (st.chain_block_seek + 1 == CBLOCK_CAP) {  // Need to allocate new chain block
-                // Allocate new chain block and update chain_block_seek
-                cb->chain.next = alloc_block();
-
-                st.chain_block_id = cb->chain.next;
-                st.chain_block_seek = 0;
-
-                cb = (chain_block_t*)blocks[st.chain_block_id];
-            } else {
-                ++st.chain_block_seek;
-            }
-
-            cb->data_block_ids[st.chain_block_seek] = alloc_block();
-            st.data_block_seek = 0;
-        } else {  // Update seek normally
-            ++st.data_block_seek;
-        }
+        next_byte(&st, 1);
+        chain_block_t * cb = (chain_block_t*)blocks[st.chain_block_id];
         ((char*)blocks[cb->data_block_ids[st.chain_block_seek]])[st.data_block_seek] = buf[seek];
     }
 
-    ab->size = max(ab->size, offset + size);
+    ab->size = max(ab->size, min(ab->size, offset) + size);
     time(&ab->atime);    
 
     return seek;
