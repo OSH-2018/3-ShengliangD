@@ -192,19 +192,16 @@ void next_chain_block(seek_tuple_t *st, int alloc) {
 
     st->chain_block_id = cb->chain.next;
     st->chain_block_seek = 0;
-
-    cb = (chain_block_t*)blocks[st->chain_block_id];
 }
 
 void next_data_block(seek_tuple_t *st, int alloc) {
-    chain_block_t * cb = (chain_block_t*)blocks[st->chain_block_id];    
-   
     if (st->chain_block_seek + 1 == CBLOCK_CAP) {
         next_chain_block(st, alloc);
     } else {
         ++st->chain_block_seek;
     }
-    
+
+    chain_block_t * cb = (chain_block_t*)blocks[st->chain_block_id];        
     if (alloc && cb->data_block_ids[st->chain_block_seek] == 0)
         cb->data_block_ids[st->chain_block_seek] = alloc_block();
 
@@ -212,7 +209,6 @@ void next_data_block(seek_tuple_t *st, int alloc) {
 }
 
 void next_byte(seek_tuple_t *st, int alloc) {
-    chain_block_t * cb = (chain_block_t*)blocks[st->chain_block_id];
     if (st->data_block_seek + 1 == BLOCK_SIZE) {
         next_data_block(st, alloc);
     } else {
