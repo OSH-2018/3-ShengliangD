@@ -356,10 +356,15 @@ static int sffs_read(const char *path, char *buf, size_t size, off_t offset, str
     locate(offset, ab, &st);
 
     size_t seek;
-    for (seek = 0; seek < size && offset + seek < ab->size; ++seek) {
+    for (seek = 0; seek < size && offset + seek < ab->size; ) {
         next_byte(&st, 0);
         chain_block_t * cb = (chain_block_t*)blocks[st.chain_block_id];        
-        buf[seek] = ((char*)blocks[cb->data_block_ids[st.chain_block_seek]])[st.data_block_seek];
+
+        void * copy_src = blocks[cb->data_block_ids[st.chain_block_seek]] + st.data_block_seek;
+        ull copy_size = min(ab->size - seek, min(size - seek, BLOCK_SIZE - st.data_block_seek));
+        memcpy(buf + seek, copy_src, copy_size);
+        seek += copy_size;
+        st.data_block_seek += copy_size - 1;
     }
 
     return seek;
@@ -390,10 +395,18 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
     locate(offset, ab, &st);
 
     size_t seek;
-    for (seek = 0; seek < size; ++seek) {
+    for (seek = 0; seek < size; ) {
         next_byte(&st, 1);
         chain_block_t * cb = (chain_block_t*)blocks[st.chain_block_id];
+/*
         ((char*)blocks[cb->data_block_ids[st.chain_block_seek]])[st.data_block_seek] = buf[seek];
+        ++seek;
+*/
+        void * copy_dst = blocks[cb->data_block_ids[st.chain_block_seek]] + st.data_block_seek;
+        ull copy_size = min(size - seek, BLOCK_SIZE - st.data_block_seek);
+        memcpy(copy_dst, buf + seek, copy_size);
+        seek += copy_size;
+        st.data_block_seek += copy_size - 1;
     }
 
     ab->size = max(ab->size, min(ab->size, offset) + size);
