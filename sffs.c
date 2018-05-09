@@ -160,30 +160,6 @@ int find_attr_block(const char *path, ull *iid, ull *bid, attr_block_t ** ab) {
     return -ENOENT;
 }
 
-// Locate the cb and bseek to offset.
-// The resulting position is actually offset-1, because
-// we need to allocate new space if there isn't.
-void locate(off_t offset, const attr_block_t *ab, seek_tuple_t *st) {
-    st->chain_block_id = ab->chain.prev;
-    st->chain_block_seek = CBLOCK_CAP - 1;
-    st->data_block_seek = BLOCK_SIZE - 1;
-    for (off_t ofst = 0; ofst < offset && ofst < ab->size; ++ofst) {
-        chain_block_t * cb = (chain_block_t*)blocks[st->chain_block_id];        
-        if (st->data_block_seek + 1 == BLOCK_SIZE) {
-            if (st->chain_block_seek + 1 == CBLOCK_CAP) {
-                st->chain_block_id = cb->chain.next;
-                st->chain_block_seek = 0;
-            } else {
-                ++st->chain_block_seek;
-            }
-
-            st->data_block_seek = 0;
-        } else {
-            ++st->data_block_seek;
-        }
-    }
-}
-
 void next_chain_block(seek_tuple_t *st, int alloc) {
     chain_block_t * cb = (chain_block_t*)blocks[st->chain_block_id];    
 
@@ -191,12 +167,12 @@ void next_chain_block(seek_tuple_t *st, int alloc) {
         cb->chain.next = alloc_block();
 
     st->chain_block_id = cb->chain.next;
-    st->chain_block_seek = 0;
 }
 
 void next_data_block(seek_tuple_t *st, int alloc) {
     if (st->chain_block_seek + 1 == CBLOCK_CAP) {
         next_chain_block(st, alloc);
+        st->chain_block_seek = 0;
     } else {
         ++st->chain_block_seek;
     }
@@ -204,15 +180,40 @@ void next_data_block(seek_tuple_t *st, int alloc) {
     chain_block_t * cb = (chain_block_t*)blocks[st->chain_block_id];        
     if (alloc && cb->data_block_ids[st->chain_block_seek] == 0)
         cb->data_block_ids[st->chain_block_seek] = alloc_block();
-
-    st->data_block_seek = 0;
 }
 
 void next_byte(seek_tuple_t *st, int alloc) {
     if (st->data_block_seek + 1 == BLOCK_SIZE) {
         next_data_block(st, alloc);
+        st->data_block_seek = 0;
     } else {
         ++st->data_block_seek;
+    }
+}
+
+// Locate the cb and bseek to offset.
+// The resulting position is actually offset-1, because
+// we need to allocate new space if there isn't.
+void locate(off_t offset, const attr_block_t *ab, seek_tuple_t *st) {
+    st->chain_block_id = ab->chain.prev;
+    st->chain_block_seek = CBLOCK_CAP - 1;
+    st->data_block_seek = BLOCK_SIZE - 1;
+
+    off_t ofst = 0;
+
+    while (ofst < ab->size && ofst < offset && offset - ofst >= CBLOCK_CAP * BLOCK_SIZE) {
+        next_chain_block(st, 0);
+        ofst += CBLOCK_CAP * BLOCK_SIZE;
+    }
+
+    while (ofst < ab->size && ofst < offset && offset - ofst >= BLOCK_SIZE) {
+        next_data_block(st, 0);
+        ofst += BLOCK_SIZE;
+    }
+
+    while (ofst < ab->size && ofst < offset) {
+        next_byte(st, 0);
+        ofst += 1;
     }
 }
 
@@ -324,7 +325,7 @@ static int sffs_mknod(const char *path, mode_t mode, dev_t dev)
         ((ull*)blocks[IBLOCK_BEGIN + iid / INDEX_PER_BLOCK])[iid % INDEX_PER_BLOCK] = bid;
     }
 
-    // Fill file attr into the block
+    // Fill file attr into the c
     attr_block_t attr;
     strncpy(attr.name, path + 1, FNAME_LIMIT + 1);
     time(&attr.atime);
@@ -398,10 +399,7 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
     for (seek = 0; seek < size; ) {
         next_byte(&st, 1);
         chain_block_t * cb = (chain_block_t*)blocks[st.chain_block_id];
-/*
-        ((char*)blocks[cb->data_block_ids[st.chain_block_seek]])[st.data_block_seek] = buf[seek];
-        ++seek;
-*/
+
         void * copy_dst = blocks[cb->data_block_ids[st.chain_block_seek]] + st.data_block_seek;
         ull copy_size = min(size - seek, BLOCK_SIZE - st.data_block_seek);
         memcpy(copy_dst, buf + seek, copy_size);
