@@ -131,6 +131,9 @@ static int sffs_mknod(const char *path, mode_t mode, dev_t dev)
     attr->size = 0;
     attr->chain.prev = bid;
     attr->chain.next = 0;
+    attr->tail.chain_block_id = bid;
+    attr->tail.chain_block_seek = CBLOCK_CAP - 1;
+    attr->tail.data_block_seek = BLOCK_SIZE - 1;
 
     return 0;
 }
@@ -202,7 +205,11 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
         st.data_block_seek += copy_size - 1;
     }
 
-    ab->size = max(ab->size, min(ab->size, offset) + size);
+    if (min(ab->size, offset) + size > ab->size) {
+        ab->size = min(ab->size, offset) + size;
+        ab->tail = st;
+    }
+
     time(&ab->atime);    
 
     return seek;
@@ -241,6 +248,7 @@ static int sffs_truncate(const char *path, off_t size) {
         seek_tuple_t st;
         locate(size, ab, &st);
         free_space(st);
+        ab->tail = st;
     } else {  // The file is smaller, extent it and fill with zero
         // I'm really lazy, use this inefficient method for now.
         {
