@@ -210,7 +210,6 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
         ab->tail = st;
     }
     time(&ab->atime);
-
     return seek;
 }
 
@@ -247,7 +246,6 @@ static int sffs_truncate(const char *path, off_t size) {
         seek_tuple_t st;
         locate(size, ab, &st);
         free_space(st);
-        ab->size = size;
         ab->tail = st;
     } else {  // The file is smaller, extent it and fill with zero
         // I'm really lazy, use this inefficient method for now.
