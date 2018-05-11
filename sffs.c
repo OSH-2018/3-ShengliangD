@@ -16,9 +16,9 @@ static void *sffs_init(struct fuse_conn_info *conn) {
     // Fill block 0, ie. the summary of this file system
     blocks[0] = new_block();
 
-    ((ull*) blocks[0])[0] = BLOCK_SIZE;
-    ((ull*) blocks[0])[1] = BLOCK_NUM;
-    ((ull*) blocks[0])[2] = 1 + BMBLOCK_NUM + IBLOCK_NUM;
+    ((ull*)blocks[0])[0] = BLOCK_SIZE;
+    ((ull*)blocks[0])[1] = BLOCK_NUM;
+    ((ull*)blocks[0])[2] = 1 + BMBLOCK_NUM + IBLOCK_NUM;
 
     // Fill bitmap blocks
     for (ull i = 0; i < BMBLOCK_NUM; ++i) {
@@ -131,6 +131,9 @@ static int sffs_mknod(const char *path, mode_t mode, dev_t dev)
     attr->size = 0;
     attr->chain.prev = bid;
     attr->chain.next = 0;
+    attr->tail.chain_block_id = bid;
+    attr->tail.chain_block_seek = CBLOCK_CAP - 1;
+    attr->tail.data_block_seek = BLOCK_SIZE - 1;
 
     return 0;
 }
@@ -202,8 +205,11 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
         st.data_block_seek += copy_size - 1;
     }
 
-    ab->size = max(ab->size, min(ab->size, offset) + size);
-    time(&ab->atime);    
+    if (min(ab->size, offset) + size > ab->size) {
+        ab->size = min(ab->size, offset) + size;
+        ab->tail = st;
+    }
+    time(&ab->atime);
 
     return seek;
 }
@@ -241,16 +247,15 @@ static int sffs_truncate(const char *path, off_t size) {
         seek_tuple_t st;
         locate(size, ab, &st);
         free_space(st);
+        ab->size = size;
+        ab->tail = st;
     } else {  // The file is smaller, extent it and fill with zero
         // I'm really lazy, use this inefficient method for now.
-        {
-            char * zeros = (char*)malloc(size - ab->size);
-            memset(zeros, 0, size - ab->size);
-            sffs_write(path, zeros, size - ab->size, ab->size, NULL);
-            free(zeros);
-        }
+        char * zeros = (char*)malloc(size - ab->size);
+        memset(zeros, 0, size - ab->size);
+        sffs_write(path, zeros, size - ab->size, ab->size, NULL);
+        free(zeros);
     }
-    ab->size = size;
 
     return 0;
 }

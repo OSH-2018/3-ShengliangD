@@ -170,6 +170,11 @@ void next_byte(seek_tuple_t *st, int alloc) {
 // The resulting position is actually offset-1, because
 // we need to allocate new space if there isn't.
 void locate(off_t offset, const attr_block_t *ab, seek_tuple_t *st) {
+    if (offset >= ab->size) {
+        *st = ab->tail;
+        return;
+    }
+    
     st->chain_block_id = ab->chain.prev;
     st->chain_block_seek = CBLOCK_CAP - 1;
     st->data_block_seek = BLOCK_SIZE - 1;

@@ -33,6 +33,13 @@ typedef struct {
 
 #define FNAME_LIMIT 255
 
+// NOTE: seek_tuple_t will always be one step before the position to operate
+typedef struct {
+    ull chain_block_id;
+    ull chain_block_seek;
+    ull data_block_seek;
+} seek_tuple_t;
+
 // Meta data of a file
 typedef struct {
     chain_t chain;
@@ -43,6 +50,7 @@ typedef struct {
     uid_t uid;
     gid_t gid;
     ull size;
+    seek_tuple_t tail;
 } attr_block_t;
 
 #define CBLOCK_CAP ((BLOCK_SIZE - sizeof(chain_t)) / sizeof(ull))
@@ -51,12 +59,5 @@ typedef struct {
     chain_t chain;
     ull data_block_ids[CBLOCK_CAP];
 } chain_block_t;
-
-// NOTE: seek_tuple_t will always be one step before the position to operate
-typedef struct {
-    ull chain_block_id;
-    ull chain_block_seek;
-    ull data_block_seek;
-} seek_tuple_t;
 
 #endif
