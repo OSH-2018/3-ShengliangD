@@ -6,8 +6,8 @@
 #include <assert.h>
 #include <time.h>
 
-#define min(a, b) ((a)<=(b)?(a):(b))
-#define max(a, b) ((a)>=(b)?(a):(b))
+#define min(a, b) ({__typeof__(a) _a = a; __typeof__(b) _b = b; _a < _b ? _a : _b;})
+#define max(a, b) ({__typeof__(a) _a = a; __typeof__(b) _b = b; _a > _b ? _a : _b;})
 
 #include "sffs_def.h"
 #include "sffs_blocks.h"
@@ -184,7 +184,7 @@ static int sffs_write(const char *path, const char *buf, size_t size, off_t offs
         if (size + offset > ab->size) {
             ull need_blocks = (offset + size + BLOCK_SIZE - 1) / BLOCK_SIZE - (ab->size + BLOCK_SIZE - 1) / BLOCK_SIZE;
             if (need_blocks > avail_blocks)
-                return -E2BIG;
+                return -ENOSPC;
         }
     }
 
