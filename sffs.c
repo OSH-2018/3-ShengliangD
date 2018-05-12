@@ -247,6 +247,7 @@ static int sffs_truncate(const char *path, off_t size) {
         locate(size, ab, &st);
         free_space(st);
         ab->tail = st;
+        ab->size = size;
     } else {  // The file is smaller, extent it and fill with zero
         // I'm really lazy, use this inefficient method for now.
         char * zeros = (char*)malloc(size - ab->size);

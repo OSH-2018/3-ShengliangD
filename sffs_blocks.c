@@ -94,21 +94,22 @@ void free_space(seek_tuple_t st) {
         chain_block_t * cb = (chain_block_t*)blocks[st.chain_block_id];        
         while (st.chain_block_seek + 1 < CBLOCK_CAP && cb->data_block_ids[st.chain_block_seek + 1] != 0) {
             free_block(cb->data_block_ids[st.chain_block_seek + 1]);
+            cb->data_block_ids[st.chain_block_seek + 1] = 0;
             ++st.chain_block_seek;
         }
     }
 
     // Then free all that remains
     {
-        chain_block_t * cb = (chain_block_t*)blocks[st.chain_block_id];
+        chain_block_t * cb = (chain_block_t*)blocks[st.chain_block_id];  // Always the block before the block to be freed
         while (cb->chain.next != 0) {
             st.chain_block_id = cb->chain.next;
-            chain_block_t * tcb = (chain_block_t*)blocks[cb->chain.next];
-            cb->chain.next = tcb->chain.next;
+            chain_block_t * ncb = (chain_block_t*)blocks[cb->chain.next];
+            cb->chain.next = ncb->chain.next;
 
             st.chain_block_seek = 0;
-            while (st.chain_block_seek < CBLOCK_CAP && tcb->data_block_ids[st.chain_block_seek] != 0) {
-                free_block(tcb->data_block_ids[st.chain_block_seek]);
+            while (st.chain_block_seek < CBLOCK_CAP && ncb->data_block_ids[st.chain_block_seek] != 0) {
+                free_block(ncb->data_block_ids[st.chain_block_seek]);
                 ++st.chain_block_seek;
             }
             free_block(st.chain_block_id);
