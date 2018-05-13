@@ -1,18 +1,22 @@
-try: sffs
-	mkdir -p tmp
-	./sffs tmp & sleep 0.2 && cd tmp && zsh && cd .. && sudo umount -f tmp
-	rmdir tmp
+NAME=sffs
+CC=gcc
+CC_FLAGS=-D_FILE_OFFSET_BITS=64
+LD_LIBS=-lfuse
+TMP_DIR=tmp
+SHELL=zsh
 
-debug: sffs
-	mkdir -p tmp
-	./sffs -d tmp & sleep 0.2 && cd tmp && zsh && cd .. && sudo umount -f tmp
-	rmdir tmp
+all: ${NAME}
 
-sffs: sffs.o sffs_blocks.o
-	gcc -o $@ $^ -lfuse
+debug: ${NAME}
+	mkdir -p ${TMP_DIR}
+	./sffs -d ${TMP_DIR} & sleep 0.2 && cd ${TMP_DIR} && ${SHELL} && cd .. && sudo umount -f ${TMP_DIR}
+	rmdir ${TMP_DIR}
+
+${NAME}: ${NAME}.o ${NAME}_blocks.o
+	${CC} ${LD_LIBS} -o $@ $^
 
 %.o: %.c
-	gcc -D_FILE_OFFSET_BITS=64 -c -o $@ $^
+	${CC} ${CC_FLAGS} -c -o $@ $^
 
 clean:
-	rm -rf *.o sffs
+	rm -rf *.o ${NAME}
